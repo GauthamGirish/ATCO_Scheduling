@@ -1,4 +1,3 @@
-#pylint: disable-all
 import random
 import copy
 import pulp
@@ -318,20 +317,15 @@ def display_shift_schedule(day_schedule,shift,ratings,timings):
             print()
     print()
 
+def shift_finder(shifts, id):
+    for k, g_dict in shifts.items():
+        for g, atco_ids in g_dict.items():
+            if id in atco_ids:
+                return k, g
+    return None, None  # if id is not found
 
-'''
 
-shift=1
-for rating in ratings:
-    table = scheduler(shift,ratings[rating],shifts[shift][rating])
-    print(f"Rating {rating} schedule for shift {shift}")
-    for i in range(ratings[rating]):
-        print(f"Position {i}:",end='\t')
-        for j in table[i]:
-            print(table[i][j], end='\t')
-        print()
-    print()
-'''
+
     
 if __name__ == "__main__":
     # Code to execute if this script is run directly
@@ -382,7 +376,6 @@ if __name__ == "__main__":
                          shift_names[1]: ['13.15', '14.00', '14.45', '15.30', '16.15', '17.00', '17.45', '18.30', '19.15'],
                          shift_names[2]: ['20.00', '20.45', '21.30', '22.15', '23.00', '23.45', '0.30', '1.15', '2.00', '2.45', '3.30', '4.15', '5.00', '5.45', '6.30']
                          }
-
     
     #Generating daily roster
     print("Generating a complete daily roster ...")
@@ -393,7 +386,7 @@ if __name__ == "__main__":
     
     while True:
         print()
-        choice=input("Do you want to see\n1. Complete day roster\n2. Shift superwiser view\n3. Single Shift Roster\n4. Exit\nEnter your choice: ")
+        choice=input("Do you want to see\n1. Complete day roster\n2. Shift superwiser view\n3. Single Shift Roster\n4. Atco view\n5. Exit\nEnter your choice: ")
 
         #Complete day roster
         if choice=='1':
@@ -410,6 +403,24 @@ if __name__ == "__main__":
             shift=shift_names[shift-1]
             print()
             display_shift_schedule(day_schedule,shift,ratings,timings[shift])
+
+        elif choice=='4':
+            id='Atco'+input('Enter ATCO ID: ')
+            assigned_shift,assigned_rating=shift_finder(shifts,id)
+            if assigned_shift<=3:
+                print(f'Assigned to {shift_names[assigned_shift-1]} - {assigned_rating}')
+                assigned_schedule = {time: 'Break' for time in timings[shift_names[assigned_shift-1]]}
+                table = day_schedule[shift_names[assigned_shift-1]][assigned_rating]
+                i=0
+                for work in assigned_schedule:
+                    for p in table:
+                        if table[p][i]==id:
+                            assigned_schedule[work]=f'{assigned_rating} {p+1}'
+                    i+=1
+                for time, work in assigned_schedule.items():
+                    print(f"{time} : {work}")
+            else:
+                print(shift_names[assigned_shift-1])
 
         else:
             print("Goodbye")
