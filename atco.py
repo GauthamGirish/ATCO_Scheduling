@@ -1,3 +1,4 @@
+#pylint: disable-all
 import random
 import copy
 import pulp
@@ -82,7 +83,7 @@ class Environment:
         removed=[]
         for p in self.table:
             if actions[p] == 'same':
-                reward[p] -= 2
+                reward[p] -= 1
                 self.table[p][sn]=self.table[p][s]
             else:
                 if self.rest.empty():
@@ -91,7 +92,7 @@ class Environment:
                     return reward, True
                 removed.append(self.table[p][s])
                 self.table[p][sn]=self.rest.get()
-                reward[p]-= 1
+                reward[p]-= 2
         for ppl in removed:
             self.rest.put(ppl)
         return reward, False
@@ -178,17 +179,18 @@ def generate_random_atcos(n,ratings):
 
 def add_admin_atco(atcos, admin_atco_count,ratings):
     ratings_list = [r for r in ratings]
-    admin_atco_name = f'GenShift_{admin_atco_count}'
-    preferences = {rating: 10 for rating in ratings_list}  # Preference score of 10 for all ratings
+    admin_atco_name = f'Atco{admin_atco_count}'
+    preferences = {rating: 1 for rating in ratings_list}  # Preference score of 10 for all ratings
     atcos[admin_atco_name] = {
         'ratings': ratings_list,
         'preferences': preferences
     }
     return atcos
 
-# main function where the magic happens
+# binary integer linear programming
 def assign_atcos_to_ratings(ratings, atcos):
     admin_atco_count = 0  # Counter for admin atcos
+    n=len(atcos)
     
     while True:
         # Create a list of all assignments and a dictionary of preferences
@@ -238,7 +240,7 @@ def assign_atcos_to_ratings(ratings, atcos):
         else:
             # Infeasible solution; add an admin atco and try again
             admin_atco_count += 1
-            atcos = add_admin_atco(atcos, admin_atco_count, ratings)
+            atcos = add_admin_atco(atcos, n+admin_atco_count, ratings)
 
     # Output the results
     #print("Status:", pulp.LpStatus[prob.status])
@@ -287,6 +289,106 @@ def assign_atcos_to_ratings(ratings, atcos):
         print("No feasible solution found.")
     return shift
 
+
+#reassigning the atcos incase of leave
+def reassign_atcos_to_ratings(ratings, shift_positions, atcos, leave_counter):
+    #merging all assignments to single list
+    shift_atcos={}
+    for i in atcos:
+        for j in shift_positions:
+            if i in shift_positions[j]:
+                shift_atcos[i]=atcos[i]
+
+    possible_assignments={rating: None for rating in ratings}
+    possible_assignments["none"]=None
+
+    
+    for addn_rated in possible_assignments:
+        if addn_rated!=["none"]:
+            ratings_list = [r for r in ratings]
+            shift_atcos[f"GeSh{leave_counter}"]={'ratings':[addn_rated],'preferences':{addn_rated:1}}
+        else:
+            shift_atcos.pop('GeSh{leave_counter}', None)
+        # Create a list of all assignments and a dictionary of preferences
+        assignments = []
+        preferences = {}
+        for atco, data in shift_atcos.items():
+            quals = data['ratings']
+            prefs = data['preferences']
+            for rating in quals:
+                assignments.append((atco, rating))
+                preferences[(atco, rating)] = prefs.get(rating, 0)  # Default to 0 if not specified
+
+        # Create the problem variable to contain the problem data
+        prob = pulp.LpProblem("Atco_Rating_Assignment_With_Preferences", pulp.LpMaximize)
+
+        # Decision variables: x[(atco, rating)] = 1 if atco is assigned to rating, 0 otherwise
+        x = pulp.LpVariable.dicts("assign", assignments, cat='Binary')
+
+        # Objective Function: Maximize total preference score
+        prob += pulp.lpSum([preferences[(atco, rating)] * x[(atco, rating)] for (atco, rating) in assignments]), "TotalPreferenceScore"
+
+        # Constraints
+
+        # 1. Each rating must be assigned the required number of atcos
+        for rating in ratings:
+            prob += (
+                pulp.lpSum([x[(atco, rating)] for atco in shift_atcos if (atco, rating) in assignments])
+                == ratings[rating],
+                f"RatingRequirement_{rating}"
+            )
+
+        # 2. Each atco must be assigned to exactly one rating
+        for atco in shift_atcos:
+            prob += (
+                pulp.lpSum([x[(atco, rating)] for rating in shift_atcos[atco]['ratings']])
+                <= 1,
+                f"AtcoAssignment_{atco}"
+            )
+
+        # Solve the problem
+        prob.solve(pulp.PULP_CBC_CMD(msg=0))
+
+        # Check if a feasible solution was found
+        if prob.status == 1:
+            # Feasible solution found
+            total_pref_score = 0
+            assigned_atcos = {}  # Dictionary to store assigned atcos per rating
+            for atco, data in shift_atcos.items():
+                assigned = False
+                for rating in data['ratings']:
+                    if x.get((atco, rating)) and x[(atco, rating)].varValue == 1:
+                        pref_score = preferences[(atco, rating)]
+                        total_pref_score += pref_score
+                        if rating not in assigned_atcos:
+                            assigned_atcos[rating] = []
+                        assigned_atcos[rating].append(atco)
+                        assigned = True
+                        break  # Since the atco is assigned to one rating
+                
+                if not assigned:
+                    # If not assigned, find the rating with the highest preference
+                    best_rating = max(data['ratings'], key=lambda r: preferences[(atco, r)])
+                    print(f"{atco}: Not assigned to any rating, assigning to {best_rating} based on highest credit.")
+                    
+                    # Assign atco to the rating with the highest preference
+                    if best_rating not in assigned_atcos:
+                        assigned_atcos[best_rating] = []
+                    assigned_atcos[best_rating].append(atco)
+                    total_pref_score += preferences[(atco, best_rating)]
+            
+            possible_assignments[addn_rated]=assigned_atcos
+    possible_ratings=[key for key, value in possible_assignments.items() if value is not None]
+    if "none" in possible_ratings:
+        print("No additional ATCO's required")
+        return possible_assignments["none"]
+    else:
+        print(f"Your possible options for additional ATCO ratings are {possible_ratings}")
+        choice= input(f"Enter your available/preferred rated operator: ")
+        return possible_assignments.get(choice, possible_ratings[0])
+
+
+
 # split the list for each grp into number of day-cycles
 def split_list(lst, n):
     if len(lst) < n:
@@ -324,6 +426,21 @@ def shift_finder(shifts, id):
                 return k, g
     return None, None  # if id is not found
 
+def generate_daily_schedule(shift_names, ratings, shifts):
+    day_schedule = {}
+    for i in range(1,4):
+        shift=i
+        day_schedule[shift_names[i-1]]= {rating: scheduler(shift,ratings[rating],shifts[shift][rating]) for rating in ratings}
+    return day_schedule
+
+def rotate_shifts(shifts,no_of_rotations):
+    new_shifts=copy.deepcopy(shifts)
+    for i in range(no_of_rotations):
+        temp_shift=new_shifts[5]
+        for j in range(4,0,-1):
+            new_shifts[j+1]=new_shifts[j]
+        new_shifts[1]=temp_shift
+    return new_shifts
 
 
     
@@ -378,15 +495,22 @@ if __name__ == "__main__":
                          }
     
     #Generating daily roster
-    print("Generating a complete daily roster ...")
-    day_schedule = {}
-    for i in range(1,4):
-        shift=i
-        day_schedule[shift_names[i-1]]= {rating: scheduler(shift,ratings[rating],shifts[shift][rating]) for rating in ratings}
+    print("Generating a complete 5 day roster ...")
+    five_day_shifts={}
+    five_day_schedule={}
+    for i in range(1,6):
+        day_name = f'Day {i}'
+        five_day_shifts[day_name]=rotate_shifts(shifts,i-1)
+        five_day_schedule[day_name]=generate_daily_schedule(shift_names, ratings, five_day_shifts[day_name])
     
+    leave_counter=1
     while True:
         print()
-        choice=input("Do you want to see\n1. Complete day roster\n2. Shift superwiser view\n3. Single Shift Roster\n4. Atco view\n5. Exit\nEnter your choice: ")
+        day_name=f'Day {input("Choose day: ")}'
+        day_schedule=five_day_schedule[day_name]
+        shifts=five_day_shifts[day_name]
+        print()
+        choice=input("Do you want to see\n1. Complete day roster\n2. Shift superwiser view\n3. Single Shift Roster\n4. Atco view\n5. Apply for leave\n6. Exit\nEnter your choice: ")
 
         #Complete day roster
         if choice=='1':
@@ -421,6 +545,31 @@ if __name__ == "__main__":
                     print(f"{time} : {work}")
             else:
                 print(shift_names[assigned_shift-1])
+
+        elif choice=='5':
+            id='Atco'+input('Enter ATCO ID for leave: ')
+            assigned_shift,assigned_rating=shift_finder(shifts,id)
+            if assigned_shift<=3:
+                shifts[assigned_shift][assigned_rating].remove(id)
+                x = ratings[assigned_rating]
+                req = x // 2 + (x - x // 2) * 2
+                if len(shifts[assigned_shift][assigned_rating])>=req:
+                    print("Leave Approved")
+                    five_day_schedule[day_name][shift_names[assigned_shift-1]][assigned_rating]= scheduler(assigned_shift,ratings[assigned_rating],shifts[assigned_shift][assigned_rating])
+                else:
+                    no_of_atcos = copy.deepcopy(ratings)
+                    n = 0
+                    for r in ratings:
+                        x = ratings[r]
+                        no_of_atcos[r] = x // 2 + (x - x // 2) * 2
+                        n += no_of_atcos[r]
+
+                    shifts[assigned_shift]=reassign_atcos_to_ratings(no_of_atcos, shifts[assigned_shift], atcos, leave_counter)
+                    five_day_schedule[day_name][shift_names[assigned_shift-1]][assigned_rating]= scheduler(assigned_shift,ratings[assigned_rating],shifts[assigned_shift][assigned_rating])
+                    leave_counter +=1
+            else:
+                print("Already on leave")
+
 
         else:
             print("Goodbye")
